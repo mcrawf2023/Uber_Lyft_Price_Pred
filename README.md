@@ -1,1 +1,1 @@
-# Uber_Lyft_Price_Pred
+This was the final project for Predictive Analytics where my group developed a predictive model forecasting Uber and Lyft prices utilizing ride and weather datasets. We ran a backward elimination method on training data to select the most important variables in determining ride price. Then, we reduced the number of numerical variables through Principal Component Analysis (PCA) and built a linear regression model with the selected principal components.
