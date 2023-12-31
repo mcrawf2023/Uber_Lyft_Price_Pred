@@ -1,0 +1,321 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+Uber and Lyft Price Prediction
+Preston Chen, Megan Crawford, Mitch Feren, Alex Sampson
+Prof. Huynh
+Predictive Analytics Project Draft
+
+Installing Packages
+```{r}
+#install.packages("tidyverse")
+#install.packages("pls")
+library (pls)
+library(forecast)
+library(zoo)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+
+
+
+options(scipen = 999)
+```
+
+Loading Data, Data Exploration, Data Preparation
+```{r}
+# Loading in the data from a csv
+cab_rides <- read.csv('Team05_Report_Data.csv')
+
+```
+
+```{r}
+# Looking at first couple observations
+head(cab_rides)
+```
+
+```{r}
+# removes the rows with a duplicate ID
+cab_rides <- distinct(cab_rides, cab_rides$id, .keep_all = TRUE )
+cab_rides <- na.omit(cab_rides)
+```
+
+```{r}
+  
+# Visualizations
+
+
+summary(cab_rides) #summary stats for the data
+
+
+hist(cab_rides$price,xlim = c(0,110), ylim = c(0,250000), main = "Distribution of Prices", xlab = "Price in Dollars ") #distribution of prices
+
+
+#Looking at the distribution of source and destination locations
+
+counts <- table(cab_rides$source)
+barplot(counts, main="Source Distribution",las = 1, horiz = TRUE, cex.names=0.3, xlim = c(0,100000))
+
+
+counts2 <- table(cab_rides$destination)
+barplot(counts2, main="Destination Distribution",las = 1, horiz = TRUE, cex.names=0.3, xlim = c(0,100000))
+
+
+
+#Distribution of the type of rides 
+counts3 <- table(cab_rides$name)
+barplot(counts3, main="Type Distribution",las = 1, horiz = TRUE, cex.names=0.55, xlim = c(0,120000)
+        ,xlab = "Frequency")
+
+
+#Price by each destination
+
+agg_dest <- aggregate(cab_rides$price, 
+          by = list(cab_rides$destination), 
+          FUN = mean,
+          na.rm = TRUE)
+
+
+agg_dest$Avg_Price <- agg_dest$x
+agg_dest$Destination <- agg_dest$Group.1
+
+
+ggplot(aes(x=Destination,y=Avg_Price),data=agg_dest, main = "Price by Destination")+
+  geom_point() +
+  scale_x_discrete(guide = guide_axis(angle = 90))
+
+
+#Price by each source
+
+agg_source <- aggregate(cab_rides$price, 
+          by = list(cab_rides$source), 
+          FUN = mean, 
+          na.rm = TRUE)
+
+
+agg_source$Avg_Price <- agg_source$x
+agg_source$Source <- agg_source$Group.1
+
+
+ggplot(aes(x=Source,y=Avg_Price),data=agg_source, main = "Price by Source")+
+  geom_point() +
+  scale_x_discrete(guide = guide_axis(angle = 90))
+
+#Boxplot of Ride and Distance
+par(mfrow=c(1,2))
+boxplot(cab_rides$distance, main = "Distance")
+boxplot(cab_rides$price, main = "Price")
+
+
+#Boxplot of Temperature and Clouds
+par(mfrow=c(1,2))
+boxplot(cab_rides$temp, main = "Temperature")
+boxplot(cab_rides$clouds, main = "Clouds")
+
+
+
+#Boxplot of Pressure and Humidity
+par(mfrow=c(1,2))
+boxplot(cab_rides$pressure, main = "Pressure")
+boxplot(cab_rides$humidity, main = "Humidity")
+
+
+#Boxplot of Rain
+boxplot(cab_rides$rain, main = "Rain")
+```
+
+
+
+```{r}
+# Eliminating outlier rows in price column
+price_outliers <- subset(cab_rides, cab_rides['price'] > 42.75)
+cab_rides <- setdiff(cab_rides, price_outliers)
+```
+
+```{r}
+# Setting seed and breaking data into Uber and Lyft sets
+RNGkind(sample.kind = "Rounding")
+set.seed(123)
+
+uber_rides <- cab_rides %>% filter(cab_type == 1)
+lyft_rides <- cab_rides %>% filter(cab_type == 0)
+```
+
+```{r}
+# Separates Uber and Lyft data into training (70% of data set) and validation (30%) sets
+uber.sample.rows <- sample(rownames(uber_rides), 50000)
+uber_sample <- uber_rides[uber.sample.rows,]
+
+lyft.sample.rows <- sample(rownames(lyft_rides),50000)
+lyft_sample <- lyft_rides[lyft.sample.rows,]
+
+uber.train.index <- sample(rownames(uber_sample), dim(uber_sample)[1]*0.7)
+uber.train <- uber_sample[uber.train.index,]
+uber.valid.index <- setdiff(rownames(uber_sample), uber.train.index)
+uber.valid <- uber_sample[uber.valid.index, ]
+
+lyft.train.index <- sample(rownames(lyft_sample), dim(lyft_sample)[1]*0.7)
+lyft.train <- lyft_sample[lyft.train.index,]
+lyft.valid.index <- setdiff(rownames(lyft_sample), lyft.train.index)
+lyft.valid <- lyft_sample[lyft.valid.index, ]
+```
+
+Principal Component Analysis
+```{r}
+head(uber.train)
+options(scipen = 999, digits = 2)
+
+# Uber PCA
+pca.uber <- prcomp(na.omit(uber.train[, c(3, 8, 14, 16:18, 20:21, 24:25)]), scale. = T)
+summary(pca.uber)
+pca.uber$rotation[,1:8]
+
+#Lyft PCA
+pca.lyft <- prcomp(na.omit(lyft.train[, c(3, 8, 14, 16:18, 20:21, 24:25)]), scale. = T)
+summary(pca.lyft)
+pca.lyft$rotation[,1:8]
+```
+Principal Component Regression
+```{r}
+library (forecast)
+#Eliminate the non-numerical variables
+uber.train.pcr <- uber.train[, c(3, 8, 14, 16:18, 20:21, 24:25)]
+uber.valid.pcr <- uber.valid[, c(3, 8, 14, 16:18, 20:21, 24:25)]
+lyft.train.pcr <- lyft.train[, c(3, 8, 14, 16:18, 20:21, 24:25)]
+lyft.valid.pcr <- lyft.valid[, c(3, 8, 14, 16:18, 20:21, 24:25)]
+
+#Uber PCR
+
+
+library (pls)
+pcr_model.uber<- pcr(price ~., data = uber.train.pcr, scale = TRUE, validation = "CV")
+summary(pcr_model.uber)
+
+pcr_predict.uber <- predict(pcr_model.uber, uber.train.pcr, ncomp = 4)
+
+sqrt(mean((pcr_predict.uber - uber.valid.pcr$price)^2))
+
+#Lyft PCR
+```
+
+
+
+Uber Model and Variable Selection
+```{r}
+# Builds out Uber model
+uber.lm <- lm(price ~ source + distance + surge_multiplier + temp + clouds + name +
+            pressure + rain + humidity + wind + day + hour, data = uber.train)
+summary(uber.lm)
+```
+
+```{r}
+# Uber model with backwards elimination
+uber.lm.back <- step(uber.lm, direction = 'backward')
+```
+
+```{r}
+# Model summary
+summary(uber.lm.back)
+# Uber: Backwards elimination model accuracy
+uber.lm.back.pred <- predict(uber.lm.back, uber.valid)
+accuracy(uber.lm.back.pred, uber.valid$price)
+```
+
+```{r}
+# Uber model with forwards selection
+uber.lm.forward <- step(uber.lm, direction = 'forward')
+summary(uber.lm.forward)
+```
+```{r}
+# Uber: Forward selection model accuracy
+uber.lm.forward.pred <- predict(uber.lm.forward, uber.valid)
+accuracy(uber.lm.forward.pred, uber.valid$price)
+```
+
+```{r}
+# Uber model with stepwise selection
+uber.lm.step <- step(uber.lm, direction = 'both')
+summary(uber.lm.step)
+```
+```{r}
+# Uber: stepwise selection model accuracy
+uber.lm.step.pred <- predict(uber.lm.step, uber.valid)
+accuracy(uber.lm.step.pred, uber.valid$price)
+```
+
+
+Lyft Model and Variable Selection
+```{r}
+# Builds out Lyft model
+lyft.lm <- lm(price ~ source + distance + surge_multiplier + temp + clouds + name +
+            pressure + rain + humidity + wind + day + hour, data = lyft.train)
+summary(uber.lm)
+```
+
+```{r}
+# Lyft model with backwards elimination
+lyft.lm.back <- step(lyft.lm, direction = 'backward')
+```
+
+
+```{r}
+# Model summary
+summary(lyft.lm.back)
+# Lyft: backwards elimination model accuracy
+lyft.lm.back.pred <- predict(lyft.lm.back, lyft.valid)
+accuracy(lyft.lm.back.pred, lyft.valid$price)
+```
+
+```{r}
+# Lyft model with forward selection
+lyft.lm.forward <- step(lyft.lm, direction = 'forward')
+summary(lyft.lm.forward)
+```
+
+
+```{r}
+# Lyft: forwards selection model accuracy
+lyft.lm.forward.pred <- predict(lyft.lm.forward, lyft.valid)
+accuracy(lyft.lm.forward.pred, lyft.valid$price)
+```
+
+
+```{r}
+# Lyft model with stepwise selection
+lyft.lm.step <- step(lyft.lm, direction = 'both')
+summary(lyft.lm.step)
+```
+
+
+```{r}
+# Lyft: Stepwise selection model accuracy
+lyft.lm.step.pred <- predict(lyft.lm.step, lyft.valid)
+accuracy(lyft.lm.step.pred, lyft.valid$price)
+```
+
+Principle Component Analysis and Principle Component Regression
+```{r}
+
+#pc11 or pc12 or none
+
+```
+```{r}
+#Principal Component Regression
+
+
+pcr_model<- pcr(price~., data = uber.train, scale = TRUE, validation = "CV")
+summary(pcr_model)
+
+pcr_predict <- predict(pcr_model, uber.train, ncomp = 10)
+
+mean((pcr_predict-uber.valid)^2)
+
+
+```
